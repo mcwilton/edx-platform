@@ -20,22 +20,44 @@ class OnboardingView(StudentOnboardingStatusView):
     @method_decorator(require_support_permission)
     def get(self, request, username_or_email):  # lint-amnesty, pylint: disable=missing-function-docstring
 
-        if not request.GET._mutable:
-            self.request.GET._mutable = True
+        # make mutable
+        request.GET = request.GET.copy()
 
         try:
             user = User.objects.get(Q(username=username_or_email) | Q(email=username_or_email))
         except User.DoesNotExist:
             return JsonResponse([])
 
-        self.request.GET['username'] = user.username
+        request.GET['username'] = user.username
         enrollments = get_enrollments(user.username)
-        all_resp = []
+
+        # sort by enrollment date
+        enrollments = sorted(enrollments, key = lambda x: x['created'], reverse=True)
+
+        onboarding_status = {
+            'verified_in': None,
+            'current_status': None
+        }
 
         for enrollment in enrollments:
-            self.request.GET['course_id'] = enrollment['course_details']['course_id']
-            resp = super().get(request).data
-            resp['course_id'] = enrollment['course_details']['course_id']
-            all_resp.append(resp)
+            request.GET['course_id'] = enrollment['course_details']['course_id']
 
-        return JsonResponse(all_resp)
+            # get status
+            # TODO: Filter only verified tracks
+            status = super().get(request).data
+
+            if 'onboarding_status' in status:
+                status['course_id'] = enrollment['course_details']['course_id']
+                status['enrollment_date'] = enrollment['created']
+                status['instructor_dashboard_link'] = '/courses/{}/instructor#view-special_exams'.format(status['course_id'])
+                
+                #  set most recent status
+                if onboarding_status['current_status'] is None:
+                    onboarding_status['current_status'] = status
+
+                # Loop to find original verified course. Expensive!
+                if status['onboarding_status'] == 'verified':
+                    onboarding_status['verified_in'] = status
+                    break         
+
+        return JsonResponse(onboarding_status)
